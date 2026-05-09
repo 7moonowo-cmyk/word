@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>p5.js 文字重複排列</title>
+  <!-- 引入 p5.js 函式庫 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <!-- 引入 p5.sound 函式庫 (用於音效) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+  <!-- 引入 Google Fonts 恐怖字體 (Nosifer) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nosifer&display=swap" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden; /* 防止出現捲軸 */
+      background-color: #222;
+    }
+  </style>
+</head>
+<body>
+
+<script>
+  let inputElement; // 用來儲存輸入框物件
+  let baseTextSize = 64; //設定字體大小
+  let sizeSlider; // 用來儲存滑桿物件
+  let jumpScareImg; // 儲存圖片
+  let showJumpScare = false; // 控制圖片顯示
+  let jumpScareStartTime = 0; // 記錄顯示開始時間
+  let bloodSplatters = []; // 儲存血跡物件
+  let splatterBuffer; // [New] 用來暫存單個血跡的畫布，解決透明度疊加問題
+  let plopSound; // 儲存血跡音效
+
+  function preload() {
+    jumpScareImg = loadImage('123.jpg'); // 預載圖片
+    plopSound = loadSound('plop.mp3'); // 預載音效
+  }
+
+  function setup() {
+    // 1. 建立全螢幕畫布
+    createCanvas(windowWidth, windowHeight);
+    
+    // 2. 建立 DOM 輸入框 (createInput)
+    inputElement = createInput('HELLO'); // 預設文字
+    
+    // 3. 設定輸入框的樣式與位置
+    inputElement.position(20, 20); // 放置在左上角
+    inputElement.size(200);
+    inputElement.style('font-size', '16px');
+    inputElement.style('padding', '5px');
+    inputElement.style('border', 'none');
+    inputElement.style('border-radius', '4px');
+    inputElement.style('background', 'rgba(255, 255, 255, 0.8)');
+    inputElement.style('z-index', '1000'); // 確保輸入框在最上層
+
+    // 4. 建立文字大小滑桿 (最小值, 最大值, 預設值)
+    sizeSlider = createSlider(15, 80, baseTextSize);
+    sizeSlider.position(20, 60); // 設定位置在輸入框下方
+    sizeSlider.size(200); // 設定寬度
+    sizeSlider.style('z-index', '1000');
+    sizeSlider.style('accent-color', '#5D4037'); // 改為深棕色
+
+    // 初始化血跡
+    // 建立一個足夠大的暫存畫布來繪製單個血跡 (500x500 應該足夠涵蓋血跡+流淌)
+    splatterBuffer = createGraphics(500, 500);
+
+    // 初始化血跡陣列，預先產生一批物件
+    initBloodSplatters(15);
+  }
+
+  function initBloodSplatters(count) {
+    bloodSplatters = []; // 清空陣列
+    for (let i = 0; i < count; i++) {
+      bloodSplatters.push(createBloodSplatter(true)); // true 表示是初始生成
+    }
+  }
+
+  // 建立單個血跡物件的工廠函式
+  function createBloodSplatter(isInitial = false) {
+    let r = random(15, 40);
+    
+    // 如果是初始生成，隨機分配狀態，避免全部同時出現
+    // 否則預設為 'waiting' 狀態
+    let startState = isInitial && random() > 0.5 ? 'dripping' : 'waiting';
+    let startOpacity = startState === 'dripping' ? 255 : 0;
+
+    // 每個血跡包含多個流淌的液體 (drips)
+    let drips = [];
+    let dripCount = floor(random(1, 4));
+    for(let j=0; j < dripCount; j++) {
+      drips.push({
+        xOff: random(-r * 0.4, r * 0.4), // 相對於中心的偏移
+        h: startState === 'dripping' ? random(20, 100) : 0, // 初始長度
+        maxH: random(50, 250), // 最大流淌長度
+        speed: random(0.5, 2.0), // 流動速度
+        w: random(2, 6) // 液體寬度
+      });
+    }
+
+    // [New] 產生噴濺周圍的小液滴 (Satellites)
+    let droplets = [];
+    let dCount = floor(random(5, 15)); // 隨機產生 5~15 個小點
+    for (let k = 0; k < dCount; k++) {
+       let angle = random(TWO_PI);
+       let dist = random(r * 0.8, r * 2.2); // 分佈在主體周圍
+       let size = random(2, 7);
+       droplets.push({ xOff: cos(angle) * dist, yOff: sin(angle) * dist, size: size });
+    }
+
+    return {
+      x: random(width),
+      y: random(height * 0.4), // 限制在螢幕上方 40% 區域
+      radius: r,
+      col: color(random(80, 150), 0, 0), // 基礎深紅色
+      noiseSeed: random(1000),
+      drips: drips,
+      state: startState, // waiting, appearing, dripping, fading
+      droplets: droplets, // [New] 儲存小液滴
+      opacity: startOpacity,
+      timer: millis() + random(500, 3000), // 用於控制狀態切換的時間
+      waitTime: random(2000, 5000) // 停留在螢幕上的時間
+    };
+  }
+
+  function draw() {
+    // --- 1. 背景層處理 ---
+    let isJumpScareActive = false;
+    if (showJumpScare) {
+      image(jumpScareImg, 0, 0, width, height); // 全螢幕顯示圖片
+      // 檢查是否超過 0.1 秒
+      if (millis() - jumpScareStartTime > 100) {
+        showJumpScare = false;
+      } else {
+        isJumpScareActive = true; // 標記目前為驚嚇狀態
+      }
+    } else {
+      background(30); // 深色背景
+    }
+
+    // --- 2. 噴漆效果 (保留在背景上) ---
+    stroke(255); // 改為全白，增加對比
+    strokeWeight(2); // 讓點變大
+    for (let i = 0; i < 1000; i++) { // 大幅增加點的數量
+      point(random(width), random(height));
+    }
+
+    // 如果處於驚嚇狀態，不繪製觸手與文字，但血跡會在最後繪製
+    if (!isJumpScareActive) {
+        drawTentaclesAndText();
+    }
+
+    // --- 3. 血跡特效 (最上層，覆蓋所有物件) ---
+    drawBloodEffect();
+  }
+
+  // 將觸手和文字的邏輯獨立出來
+  function drawTentaclesAndText() {
+    // --- 觸手效果 ---
+    noStroke(); 
+    let tentacleSpacing = 20; 
+    
+    for (let tx = 0; tx <= width; tx += tentacleSpacing) {
+      // ... (保留原本的觸手參數計算) ...
+      let grayCol = map(noise(tx * 0.5), 0, 1, 150, 255);
+      fill(grayCol);
+      let speedFactor = map(noise(tx * 0.1 + 1000), 0, 1, 0.5, 2.0);
+      let maxAmp = map(noise(tx * 0.1 + 2000), 0, 1, 10, 80);
+      let maxLen = (height / 2) - 60;
+      let tLen = map(noise(tx * 0.1), 0, 1, 50, maxLen);
+
+      beginShape();
+      // 左側
+      for (let h = 0; h <= tLen; h += 4) {
+        let yPos = height - h; 
+        let noiseVal = noise(frameCount * 0.01 * speedFactor, h * 0.02, tx * 0.05);
+        let amp = map(h, 0, tLen, 0, maxAmp); 
+        let xOffset = (noiseVal - 0.5) * amp * 3 + sin(frameCount * 0.02 * speedFactor + h * 0.1) * (amp * 0.3);
+        let halfWidth = map(h, 0, tLen, 12, 2);
+        vertex(tx + xOffset - halfWidth, yPos);
+      }
+      // 右側
+      for (let h = tLen; h >= 0; h -= 4) {
+        let yPos = height - h;
+        let noiseVal = noise(frameCount * 0.01 * speedFactor, h * 0.02, tx * 0.05);
+        let amp = map(h, 0, tLen, 0, maxAmp); 
+        let xOffset = (noiseVal - 0.5) * amp * 3 + sin(frameCount * 0.02 * speedFactor + h * 0.1) * (amp * 0.3);
+        let halfWidth = map(h, 0, tLen, 12, 2);
+        vertex(tx + xOffset + halfWidth, yPos);
+      }
+      endShape(CLOSE);
+    }
+
+    // --- 文字效果 ---
+    if (!inputElement) return; // 確保輸入框已建立，避免錯誤
+
+    // 取得使用者輸入的內容
+    let txt = inputElement.value();
+    
+    // 如果沒有輸入內容，給予一個預設值，避免畫面空白或無窮迴圈錯誤
+    if (txt.length === 0) {
+      txt = "TYPE SOMETHING";
+    }
+
+    // 設定文字屬性
+    textFont('Nosifer'); // 套用恐怖字體
+    textSize(sizeSlider.value()); // 根據滑桿數值設定文字大小
+    textAlign(LEFT, CENTER); // 水平靠左，垂直置中
+    fill(255, 0, 0); // 紅色文字
+    noStroke();
+
+    // 計算文字寬度與間距
+    // textWidth() 是 p5.js 用來計算當前字體設定下，字串佔用像素寬度的函式
+    let w = textWidth(txt); 
+    let spacing = 20; // 文字之間的額外間距
+    let totalUnitWidth = w + spacing; // 一個單元(文字+間距)的總寬度
+
+    // 避免 totalUnitWidth 為 0 導致無窮迴圈 (雖然上面有檢查空字串，但為了強健性)
+    if (totalUnitWidth < 1) totalUnitWidth = 10;
+
+    let x = 0; // 起始 x 座標
+
+    // 利用外部迴圈，重複排列文字區塊直到填滿畫面
+    while (x < width) {
+      let charX = x; // 當前字元區塊的起始 x 座標
+
+      // 利用內部迴圈，單獨繪製每個字元以產生晃動效果
+      for (let i = 0; i < txt.length; i++) {
+        const char = txt.charAt(i);
+        const shakeY = random(-3, 3); // 改為垂直晃動，並稍微增加幅度
+
+        // 在計算後的位置加上隨機偏移來繪製單一字元
+        text(char, charX, height / 2 + shakeY);
+        charX += textWidth(char); // 移動到下一個字元的位置
+      }
+      
+      x += totalUnitWidth; // 更新 x 座標，準備畫下一個文字區塊
+    }
+  }
+
+  // 新增：處理與繪製血跡
+  function drawBloodEffect() {
+    noStroke();
+    
+    // 遍歷所有血跡物件
+    for (let i = bloodSplatters.length - 1; i >= 0; i--) {
+      let b = bloodSplatters[i];
+      
+      // --- 狀態機邏輯 ---
+      if (b.state === 'waiting') {
+        if (millis() > b.timer) {
+          b.state = 'appearing';
+          
+          // 當血跡開始出現時，播放音效
+          if (plopSound && plopSound.isLoaded()) {
+            plopSound.play();
+          }
+        }
+      } else if (b.state === 'appearing') {
+        b.opacity += 5; // 淡入
+        if (b.opacity >= 255) {
+          b.opacity = 255;
+          b.state = 'dripping';
+          b.timer = millis() + b.waitTime; // 設定開始消失的時間
+        }
+      } else if (b.state === 'dripping') {
+        // 更新液體流動
+        for (let d of b.drips) {
+          if (d.h < d.maxH) {
+            d.h += d.speed; // 增長長度
+          }
+        }
+        // 時間到則開始消失
+        if (millis() > b.timer) {
+          b.state = 'fading';
+        }
+      } else if (b.state === 'fading') {
+        b.opacity -= 2; // 淡出
+        if (b.opacity <= 0) {
+          // 消失後，產生新的血跡替換舊的
+          bloodSplatters[i] = createBloodSplatter(); 
+        }
+      }
+
+      // --- 繪圖邏輯 ---
+      if (b.opacity > 0) {
+        // [Fix] 使用 splatterBuffer 解決透明度疊加問題
+        // 先在暫存畫布上以 "不透明" 繪製整個血跡形狀，讓它們融合
+        splatterBuffer.clear(); // 清除暫存畫布
+        splatterBuffer.noStroke();
+        
+        let c = b.col;
+        c.setAlpha(255); // 強制設定為不透明，以便在 buffer 上融合
+        splatterBuffer.fill(c);
+
+        // 設定 buffer 中的繪製中心點 (預留空間給上方噴濺和下方流淌)
+        let bufX = 250;
+        let bufY = 150;
+
+        // 1. 繪製主體
+        splatterBuffer.beginShape();
+        for (let a = 0; a < TWO_PI; a += 0.1) {
+            let n1 = noise(cos(a) + 1, sin(a) + 1, b.noiseSeed);
+            let n2 = noise(cos(a) * 3 + 1, sin(a) * 3 + 1, b.noiseSeed + 100);
+            let offset = map(n1, 0, 1, -0.2, 0.4) + map(n2, 0, 1, -0.1, 0.1);
+            let r = b.radius * (1 + offset);
+            splatterBuffer.vertex(bufX + r * cos(a), bufY + r * sin(a));
+        }
+        splatterBuffer.endShape(CLOSE);
+
+        // 2. 繪製小液滴
+        for (let d of b.droplets) {
+            splatterBuffer.ellipse(bufX + d.xOff, bufY + d.yOff, d.size);
+        }
+
+        // 3. 繪製流淌的液體 (與主體同色融合)
+        for (let d of b.drips) {
+            if (d.h > 1) {
+                splatterBuffer.rect(bufX + d.xOff, bufY + b.radius * 0.5, d.w, d.h, d.w/2);
+                splatterBuffer.ellipse(bufX + d.xOff + d.w/2, bufY + b.radius * 0.5 + d.h, d.w * 1.5);
+            }
+        }
+
+        // [Final Render] 將暫存畫布繪製到主畫面上，並套用整體的透明度
+        tint(255, b.opacity); // 套用透明度
+        image(splatterBuffer, b.x - bufX, b.y - bufY);
+        noTint(); // 重置 tint
+      }
+    }
+  }
+
+  // 當視窗大小改變時，重新調整畫布大小
+  function windowResized() {
+    resizeCanvas(windowWidth, windowHeight);
+    initBloodSplatters(15); // 視窗改變時重新生成血跡
+  }
+
+  function mousePressed() {
+    if (mouseButton === LEFT) {
+      showJumpScare = true;
+      jumpScareStartTime = millis();
+    }
+    userStartAudio(); // 確保瀏覽器允許播放音效
+  }
+</script>
+
+</body>
+</html>
